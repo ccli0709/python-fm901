@@ -36,7 +36,7 @@ if df_list:
     print("\n================ 合併完成 ================")
     print(f"總共讀取了 {len(all_files)} 個檔案")
     print(f"合併後的總資料筆數: {len(combined_df)} 筆")
-    
+
     if '年月日' in combined_df.columns:
         min_date = combined_df['年月日'].min()
         max_date = combined_df['年月日'].max()
@@ -91,7 +91,8 @@ if df_list:
     close_col = next(
         (col for col in winsorized_df.columns if '收盤' in col), None)
     low_col = next(
-        (col for col in winsorized_df.columns if '最低' in col or 'Low' in col or 'low' in col), close_col) # 若無最低價則預設用收盤價替代
+        # 若無最低價則預設用收盤價替代
+        (col for col in winsorized_df.columns if '最低' in col or 'Low' in col or 'low' in col), close_col)
 
     if close_col:
         # 確保資料依據股票代碼與日期排序
@@ -104,59 +105,117 @@ if df_list:
             lambda x: x.ewm(span=21, adjust=False).mean())
 
         # 計算前一天的數值，用於判斷交叉與回檔狀態
-        winsorized_df['Prev_8EMA'] = winsorized_df.groupby(code_col)['8EMA'].shift(1)
-        winsorized_df['Prev_21EMA'] = winsorized_df.groupby(code_col)['21EMA'].shift(1)
-        winsorized_df['Prev_Close'] = winsorized_df.groupby(code_col)[close_col].shift(1)
+        winsorized_df['Prev_8EMA'] = winsorized_df.groupby(code_col)[
+            '8EMA'].shift(1)
+        winsorized_df['Prev_21EMA'] = winsorized_df.groupby(code_col)[
+            '21EMA'].shift(1)
+        winsorized_df['Prev_Close'] = winsorized_df.groupby(code_col)[
+            close_col].shift(1)
 
         # X1 (單純交叉)：8 EMA 向上穿越 21 EMA 發出的買入訊號
         winsorized_df['X1_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
-                                     (winsorized_df['Prev_8EMA'] <= winsorized_df['Prev_21EMA'])
+                                     (winsorized_df['Prev_8EMA'] <=
+                                      winsorized_df['Prev_21EMA'])
 
         # X2 (回踩確認)：在 8EMA > 21EMA 期間，價格回檔 (收盤下跌) 但最低價未跌破 21 EMA
         winsorized_df['X2_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
                                      (winsorized_df[close_col] < winsorized_df['Prev_Close']) & \
                                      (winsorized_df[low_col] >= winsorized_df['21EMA']) & \
-                                     (~winsorized_df['X1_Signal']) # 排除 X1 發生的當天
+                                     (~winsorized_df['X1_Signal']
+                                      )  # 排除 X1 發生的當天
 
         # X3 (結構確立)：在 X2 發生後的隔天，收盤價上漲且成功站回(大於等於) 21 EMA
-        winsorized_df['Prev_X2'] = winsorized_df.groupby(code_col)['X2_Signal'].shift(1)
+        winsorized_df['Prev_X2'] = winsorized_df.groupby(code_col)[
+            'X2_Signal'].shift(1)
         winsorized_df['X3_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
                                      (winsorized_df['Prev_X2'] == True) & \
                                      (winsorized_df[close_col] > winsorized_df['Prev_Close']) & \
-                                     (winsorized_df[close_col] >= winsorized_df['21EMA'])
+                                     (winsorized_df[close_col]
+                                      >= winsorized_df['21EMA'])
 
         # 設定未來持倉 n 日 (此處預設為 10 日，您可以根據需求修改)
         hold_days = 10
-        
+
         # 計算未來 n 日的對數報酬率: ln(Close_t+n / Close_t)
-        winsorized_df[f'Future_{hold_days}d_Close'] = winsorized_df.groupby(code_col)[close_col].shift(-hold_days)
-        winsorized_df['Future_Log_Return'] = np.log(winsorized_df[f'Future_{hold_days}d_Close'] / winsorized_df[close_col])
+        winsorized_df[f'Future_{hold_days}d_Close'] = winsorized_df.groupby(code_col)[
+            close_col].shift(-hold_days)
+        winsorized_df['Future_Log_Return'] = np.log(
+            winsorized_df[f'Future_{hold_days}d_Close'] / winsorized_df[close_col])
+
+        # 變數說明
+        print("【變數說明】")
+        print("X1 (單純交叉)：8 EMA 向上穿越 21 EMA 發出的買入訊號")
+        print("X2 (回踩確認)：在 8EMA > 21EMA 期間，價格回檔 (收盤下跌) 但最低價未跌破 21 EMA")
+        print("X3 (結構確立)：在 X2 發生後的隔天，收盤價上漲且成功站回(大於等於) 21 EMA")
+        print(f"Y1：條件平均對數報酬率 ({hold_days} 日)")
+        print("Y2：條件波動率 / 標準差")
+        print("Y3：夏普比率 (假設無風險利率為 0)\n")
 
         # 建立評估訊號績效的函數
-        def evaluate_signal(signal_col, signal_name):
-            # 取出該訊號發生且未來報酬率不為空的樣本
-            samples = winsorized_df[winsorized_df[signal_col] == True]['Future_Log_Return'].dropna()
-            n_samples = len(samples)
-            
-            if n_samples > 0:
-                y1_mean = samples.mean() # Y1: 條件平均報酬率 (對數)
-                y2_vol = samples.std()   # Y2: 條件波動率
-                # Y3: 夏普比率 (假設無風險利率為 0。此處為持有期間夏普，若需年化可乘上 sqrt(252/n))
-                y3_sharpe = (y1_mean / y2_vol) if y2_vol != 0 else np.nan
-                
-                print(f"\n--- {signal_name} ---")
-                print(f"樣本數 (筆): {n_samples}")
-                print(f"Y1 (條件平均對數報酬率, {hold_days}日): {y1_mean:.6f}")
-                print(f"Y2 (條件波動率 / 標準差): {y2_vol:.6f}")
-                print(f"Y3 (夏普比率): {y3_sharpe:.4f}")
-            else:
-                print(f"\n--- {signal_name} ---")
-                print("無有效樣本。")
+        def evaluate_signals(df_subset, period_name):
+            results = []
+            signals = [
+                ('X1_Signal', 'X1'),
+                ('X2_Signal', 'X2'),
+                ('X3_Signal', 'X3')
+            ]
+            for sig_col, sig_name in signals:
+                samples = df_subset[df_subset[sig_col] ==
+                                    True]['Future_Log_Return'].dropna()
+                n_samples = len(samples)
+                if n_samples > 0:
+                    y1_mean = samples.mean()
+                    y2_vol = samples.std()
+                    y3_sharpe = (y1_mean / y2_vol) if y2_vol != 0 else np.nan
+                    results.append({
+                        '期間': period_name,
+                        '訊號': sig_name,
+                        '樣本數': n_samples,
+                        'Y1(報酬率)': f"{y1_mean:.6f}",
+                        'Y2(波動率)': f"{y2_vol:.6f}",
+                        'Y3(夏普)': f"{y3_sharpe:.4f}"
+                    })
+                else:
+                    results.append({
+                        '期間': period_name,
+                        '訊號': sig_name,
+                        '樣本數': 0,
+                        'Y1(報酬率)': "NaN",
+                        'Y2(波動率)': "NaN",
+                        'Y3(夏普)': "NaN"
+                    })
+            return pd.DataFrame(results)
 
-        print(f"\n衡量績效與風險 (設定持倉 n = {hold_days} 日)")
-        evaluate_signal('X1_Signal', 'X1 (單純交叉)')
-        evaluate_signal('X2_Signal', 'X2 (回踩確認)')
-        evaluate_signal('X3_Signal', 'X3 (結構確立)')
+        # 取得年份
+        winsorized_df['Year'] = pd.to_datetime(winsorized_df['年月日']).dt.year
+
+        all_results = []
+
+        # (1) 依年度分成兩群執行: 2015~2019年, 2020~2026年
+        df_group1 = winsorized_df[(winsorized_df['Year'] >= 2015) & (
+            winsorized_df['Year'] <= 2019)]
+        df_group2 = winsorized_df[(winsorized_df['Year'] >= 2020) & (
+            winsorized_df['Year'] <= 2026)]
+
+        if not df_group1.empty:
+            all_results.append(evaluate_signals(df_group1, '2015-2019'))
+        if not df_group2.empty:
+            all_results.append(evaluate_signals(df_group2, '2020-2026'))
+
+        # (2) 依各年度分別執行
+        years = sorted(winsorized_df['Year'].dropna().unique())
+        for y in years:
+            df_y = winsorized_df[winsorized_df['Year'] == y]
+            if not df_y.empty:
+                all_results.append(evaluate_signals(df_y, str(int(y))))
+
+        # 顯示結果表格
+        if all_results:
+            final_df = pd.concat(all_results, ignore_index=True)
+            print("【策略回測結果】")
+            print(final_df.to_string(index=False, justify='center'))
+        else:
+            print("無有效結果可供顯示。")
 
     else:
         print("找不到收盤價相關欄位，無法進行策略計算。")
