@@ -186,6 +186,12 @@ if df_list:
                     })
             return pd.DataFrame(results)
 
+        # 全樣本訊號分佈情形與績效
+        print("【全樣本訊號分佈情形與績效】")
+        full_sample_df = evaluate_signals(winsorized_df, '全樣本')
+        print(full_sample_df.to_string(index=False, justify='center'))
+        print()
+
         # 取得年份
         winsorized_df['Year'] = pd.to_datetime(winsorized_df['年月日']).dt.year
 
