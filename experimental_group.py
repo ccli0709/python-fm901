@@ -195,7 +195,8 @@ if df_list:
         # 取得年份
         winsorized_df['Year'] = pd.to_datetime(winsorized_df['年月日']).dt.year
 
-        all_results = []
+        group_results = []
+        year_results = []
 
         # (1) 依年度分成兩群執行: 2015~2019年, 2020~2026年
         df_group1 = winsorized_df[(winsorized_df['Year'] >= 2015) & (
@@ -204,22 +205,37 @@ if df_list:
             winsorized_df['Year'] <= 2026)]
 
         if not df_group1.empty:
-            all_results.append(evaluate_signals(df_group1, '2015-2019'))
+            group_results.append(evaluate_signals(df_group1, '2015-2019'))
         if not df_group2.empty:
-            all_results.append(evaluate_signals(df_group2, '2020-2026'))
+            group_results.append(evaluate_signals(df_group2, '2020-2026'))
 
         # (2) 依各年度分別執行
         years = sorted(winsorized_df['Year'].dropna().unique())
         for y in years:
             df_y = winsorized_df[winsorized_df['Year'] == y]
             if not df_y.empty:
-                all_results.append(evaluate_signals(df_y, str(int(y))))
+                year_results.append(evaluate_signals(df_y, str(int(y))))
 
         # 顯示結果表格
-        if all_results:
-            final_df = pd.concat(all_results, ignore_index=True)
-            print("【策略回測結果】")
-            print(final_df.to_string(index=False, justify='center'))
+        if group_results or year_results:
+            if group_results:
+                group_df = pd.concat(group_results, ignore_index=True)
+                print("【策略回測結果 - 年度分群】")
+                print(group_df.to_string(index=False, justify='center'))
+
+                print("\n【策略回測結果2 - 年度分群】(訊號優先排序)")
+                group_df_sorted = group_df.sort_values(by=['訊號', '期間'])
+                print(group_df_sorted.to_string(index=False, justify='center'))
+                print()
+
+            if year_results:
+                year_df = pd.concat(year_results, ignore_index=True)
+                print("【策略回測結果 - 各年度】")
+                print(year_df.to_string(index=False, justify='center'))
+
+                print("\n【策略回測結果2 - 各年度】(訊號優先排序)")
+                year_df_sorted = year_df.sort_values(by=['訊號', '期間'])
+                print(year_df_sorted.to_string(index=False, justify='center'))
         else:
             print("無有效結果可供顯示。")
 
