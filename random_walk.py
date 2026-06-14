@@ -95,52 +95,8 @@ if df_list:
         (col for col in winsorized_df.columns if '最低' in col or 'Low' in col or 'low' in col), close_col)
 
     if close_col:
-        # 確保資料依據股票代碼與日期排序
-        winsorized_df = winsorized_df.sort_values(by=[code_col, '年月日'])
-
-        # 計算 8EMA 與 21EMA
-        winsorized_df['8EMA'] = winsorized_df.groupby(code_col)[close_col].transform(
-            lambda x: x.ewm(span=8, adjust=False).mean())
-        winsorized_df['21EMA'] = winsorized_df.groupby(code_col)[close_col].transform(
-            lambda x: x.ewm(span=21, adjust=False).mean())
-
-        # 計算前一天的數值，用於判斷交叉與回檔狀態
-        winsorized_df['Prev_8EMA'] = winsorized_df.groupby(code_col)[
-            '8EMA'].shift(1)
-        winsorized_df['Prev_21EMA'] = winsorized_df.groupby(code_col)[
-            '21EMA'].shift(1)
-        winsorized_df['Prev_Close'] = winsorized_df.groupby(code_col)[
-            close_col].shift(1)
-
-        # X1 (單純交叉)：8 EMA 向上穿越 21 EMA 發出的買入訊號
-        winsorized_df['X1_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
-                                     (winsorized_df['Prev_8EMA'] <=
-                                      winsorized_df['Prev_21EMA'])
-
-        # X2 (回踩確認)：在 8EMA > 21EMA 期間，價格回檔 (收盤下跌) 但最低價未跌破 21 EMA
-        winsorized_df['X2_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
-                                     (winsorized_df[close_col] < winsorized_df['Prev_Close']) & \
-                                     (winsorized_df[low_col] >= winsorized_df['21EMA']) & \
-                                     (~winsorized_df['X1_Signal']
-                                      )  # 排除 X1 發生的當天
-
-        # X3 (結構確立)：在 X2 發生後的隔天，收盤價上漲且成功站回(大於等於) 21 EMA
-        winsorized_df['Prev_X2'] = winsorized_df.groupby(code_col)[
-            'X2_Signal'].shift(1)
-        winsorized_df['X3_Signal'] = (winsorized_df['8EMA'] > winsorized_df['21EMA']) & \
-                                     (winsorized_df['Prev_X2'] == True) & \
-                                     (winsorized_df[close_col] > winsorized_df['Prev_Close']) & \
-                                     (winsorized_df[close_col]
-                                      >= winsorized_df['21EMA'])
-
         # 設定未來持倉 n 日 (此處預設為 10 日，您可以根據需求修改)
         hold_days = 10
-
-        # 計算未來 n 日的對數報酬率: ln(Close_t+n / Close_t)
-        winsorized_df[f'Future_{hold_days}d_Close'] = winsorized_df.groupby(code_col)[
-            close_col].shift(-hold_days)
-        winsorized_df['Future_Log_Return'] = np.log(
-            winsorized_df[f'Future_{hold_days}d_Close'] / winsorized_df[close_col])
 
         # 變數說明
         print("【變數說明】")
@@ -186,58 +142,118 @@ if df_list:
                     })
             return pd.DataFrame(results)
 
-        # 全樣本訊號分佈情形與績效
-        print("【全樣本訊號分佈情形與績效】")
-        full_sample_df = evaluate_signals(winsorized_df, '全樣本')
-        print(full_sample_df.to_string(index=False, justify='center'))
-        print()
+        original_df = winsorized_df.copy()
+        import time
+        all_iterations_results = []
 
-        # 取得年份
-        winsorized_df['Year'] = pd.to_datetime(winsorized_df['年月日']).dt.year
+        for i in range(1, 501):
+            start_time = time.time()
 
-        group_results = []
-        year_results = []
+            # 先針對日期順序打亂
+            df_iter = original_df.copy()
+            df_iter['年月日'] = df_iter.groupby(code_col)['年月日'].transform(lambda x: np.random.permutation(x.values))
 
-        # (1) 依年度分成兩群執行: 2015~2019年, 2020~2026年
-        df_group1 = winsorized_df[(winsorized_df['Year'] >= 2015) & (
-            winsorized_df['Year'] <= 2019)]
-        df_group2 = winsorized_df[(winsorized_df['Year'] >= 2020) & (
-            winsorized_df['Year'] <= 2026)]
+            # 再依日期重新從小到大排序
+            df_iter = df_iter.sort_values(by=[code_col, '年月日'])
 
-        if not df_group1.empty:
-            group_results.append(evaluate_signals(df_group1, '2015-2019'))
-        if not df_group2.empty:
-            group_results.append(evaluate_signals(df_group2, '2020-2026'))
+            # 計算 8EMA 與 21EMA
+            df_iter['8EMA'] = df_iter.groupby(code_col)[close_col].transform(
+                lambda x: x.ewm(span=8, adjust=False).mean())
+            df_iter['21EMA'] = df_iter.groupby(code_col)[close_col].transform(
+                lambda x: x.ewm(span=21, adjust=False).mean())
 
-        # (2) 依各年度分別執行
-        years = sorted(winsorized_df['Year'].dropna().unique())
-        for y in years:
-            df_y = winsorized_df[winsorized_df['Year'] == y]
-            if not df_y.empty:
-                year_results.append(evaluate_signals(df_y, str(int(y))))
+            # 計算前一天的數值，用於判斷交叉與回檔狀態
+            df_iter['Prev_8EMA'] = df_iter.groupby(code_col)[
+                '8EMA'].shift(1)
+            df_iter['Prev_21EMA'] = df_iter.groupby(code_col)[
+                '21EMA'].shift(1)
+            df_iter['Prev_Close'] = df_iter.groupby(code_col)[
+                close_col].shift(1)
 
-        # 顯示結果表格
-        if group_results or year_results:
+            # X1 (單純交叉)：8 EMA 向上穿越 21 EMA 發出的買入訊號
+            df_iter['X1_Signal'] = (df_iter['8EMA'] > df_iter['21EMA']) & \
+                                         (df_iter['Prev_8EMA'] <=
+                                          df_iter['Prev_21EMA'])
+
+            # X2 (回踩確認)：在 8EMA > 21EMA 期間，價格回檔 (收盤下跌) 但最低價未跌破 21 EMA
+            df_iter['X2_Signal'] = (df_iter['8EMA'] > df_iter['21EMA']) & \
+                                         (df_iter[close_col] < df_iter['Prev_Close']) & \
+                                         (df_iter[low_col] >= df_iter['21EMA']) & \
+                                         (~df_iter['X1_Signal']
+                                          )  # 排除 X1 發生的當天
+
+            # X3 (結構確立)：在 X2 發生後的隔天，收盤價上漲且成功站回(大於等於) 21 EMA
+            df_iter['Prev_X2'] = df_iter.groupby(code_col)[
+                'X2_Signal'].shift(1)
+            df_iter['X3_Signal'] = (df_iter['8EMA'] > df_iter['21EMA']) & \
+                                         (df_iter['Prev_X2'] == True) & \
+                                         (df_iter[close_col] > df_iter['Prev_Close']) & \
+                                         (df_iter[close_col]
+                                          >= df_iter['21EMA'])
+
+            # 計算未來 n 日的對數報酬率: ln(Close_t+n / Close_t)
+            df_iter[f'Future_{hold_days}d_Close'] = df_iter.groupby(code_col)[
+                close_col].shift(-hold_days)
+            df_iter['Future_Log_Return'] = np.log(
+                df_iter[f'Future_{hold_days}d_Close'] / df_iter[close_col])
+
+            # 取得年份
+            df_iter['Year'] = pd.to_datetime(df_iter['年月日']).dt.year
+
+            group_results = []
+
+            # (1) 依年度分成兩群執行: 2015~2019年, 2020~2026年
+            df_group1 = df_iter[(df_iter['Year'] >= 2015) & (
+                df_iter['Year'] <= 2019)]
+            df_group2 = df_iter[(df_iter['Year'] >= 2020) & (
+                df_iter['Year'] <= 2026)]
+
+            if not df_group1.empty:
+                group_results.append(evaluate_signals(df_group1, '2015-2019'))
+            if not df_group2.empty:
+                group_results.append(evaluate_signals(df_group2, '2020-2026'))
+
+            # 記錄結果表格
             if group_results:
                 group_df = pd.concat(group_results, ignore_index=True)
-                print("【策略回測結果 - 年度分群】")
-                print(group_df.to_string(index=False, justify='center'))
+                group_df.insert(0, '測試次數', f"第 {i} 次")
+                all_iterations_results.append(group_df)
 
-                print("\n【策略回測結果2 - 年度分群】(訊號優先排序)")
-                group_df_sorted = group_df.sort_values(by=['訊號', '期間'])
-                print(group_df_sorted.to_string(index=False, justify='center'))
-                print()
+            elapsed_time = time.time() - start_time
+            print(f"隨機漫步測試: 第 {i} 次完成 (耗時: {elapsed_time:.2f} 秒)")
 
-            if year_results:
-                year_df = pd.concat(year_results, ignore_index=True)
-                print("【策略回測結果 - 各年度】")
-                print(year_df.to_string(index=False, justify='center'))
-
-                print("\n【策略回測結果2 - 各年度】(訊號優先排序)")
-                year_df_sorted = year_df.sort_values(by=['訊號', '期間'])
-                print(year_df_sorted.to_string(index=False, justify='center'))
+        # 顯示最終總表
+        if all_iterations_results:
+            final_df = pd.concat(all_iterations_results, ignore_index=True)
+            print("\n================ 隨機漫步測試總表 ================")
+            print(final_df.to_string(index=False, justify='center'))
+            
+            # 將總表儲存為 CSV 檔案 (以執行時間命名)
+            current_time_str = time.strftime("%Y%m%d_%H%M%S")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            csv_filename = f"random_walk_summary_{current_time_str}.csv"
+            csv_filepath = os.path.join(script_dir, csv_filename)
+            final_df.to_csv(csv_filepath, index=False, encoding='utf-8-sig')
+            print(f"\n隨機漫步測試總表已成功儲存至: {csv_filepath}")
+            
+            # ================ 總表敘述統計分析 ================
+            print("\n================ 隨機漫步測試總表 - 敘述統計分析 ================")
+            stat_df = final_df.copy()
+            
+            # 將字串轉回數值格式，若為 "NaN" 則自動轉為 np.nan
+            num_columns = ['樣本數', 'Y1(報酬率)', 'Y2(波動率)', 'Y3(夏普)']
+            for col in num_columns:
+                stat_df[col] = pd.to_numeric(stat_df[col], errors='coerce')
+                
+            # 依「期間」與「訊號」分組進行敘述統計
+            # 使用 stack(level=0) 將變數推至 Index 中，讓排版呈現往下生長，確保終端機顯示不會過寬
+            grouped_desc = stat_df.groupby(['期間', '訊號'])[num_columns].describe().stack(level=0)
+            
+            # 重新命名索引名稱以利閱讀
+            grouped_desc.index.names = ['期間', '訊號', '評估指標']
+            print(grouped_desc.to_string(float_format=lambda x: f'{x:>.6f}' if pd.notnull(x) else 'NaN'))
         else:
-            print("無有效結果可供顯示。")
+            print("\n無有效測試結果可供顯示。")
 
     else:
         print("找不到收盤價相關欄位，無法進行策略計算。")
